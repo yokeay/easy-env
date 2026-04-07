@@ -1,13 +1,10 @@
 name: Build & Release
-
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
-
 permissions:
   contents: write
-
 jobs:
   build:
     strategy:
@@ -26,47 +23,38 @@ jobs:
           - platform: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             label: linux-x64
-
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri -> target
-
       - name: Linux deps
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
-            librsvg2-dev patchelf libgtk-3-dev libsoup-3.0-dev \
-            javascriptcoregtk-4.1-dev
-
+            librsvg2-dev patchelf libgtk-3-dev libsoup-3.0-dev javascriptcoregtk-4.1-dev
       - name: Generate macOS .icns
-              if: matrix.platform == 'macos-latest'
-              run: |
-                mkdir -p icon.iconset
-                # 先确保源图是 1024x1024
-                sips -z 1024 1024 src-tauri/icons/icon.png --out /tmp/icon_1024.png
-                sips -z 16 16     /tmp/icon_1024.png --out icon.iconset/icon_16x16.png
-                sips -z 32 32     /tmp/icon_1024.png --out icon.iconset/icon_16x16@2x.png
-                sips -z 32 32     /tmp/icon_1024.png --out icon.iconset/icon_32x32.png
-                sips -z 64 64     /tmp/icon_1024.png --out icon.iconset/icon_32x32@2x.png
-                sips -z 128 128   /tmp/icon_1024.png --out icon.iconset/icon_128x128.png
-                sips -z 256 256   /tmp/icon_1024.png --out icon.iconset/icon_128x128@2x.png
-                sips -z 256 256   /tmp/icon_1024.png --out icon.iconset/icon_256x256.png
-                sips -z 512 512   /tmp/icon_1024.png --out icon.iconset/icon_256x256@2x.png
-                sips -z 512 512   /tmp/icon_1024.png --out icon.iconset/icon_512x512.png
-                cp /tmp/icon_1024.png icon.iconset/icon_512x512@2x.png
-                iconutil -c icns icon.iconset -o src-tauri/icons/icon.icns
-                ls -la src-tauri/icons/icon.icns
-
-      - name: Add icns to config (macOS)
+        if: matrix.platform == 'macos-latest'
+        run: |
+          mkdir -p icon.iconset
+          sips -z 1024 1024 src-tauri/icons/icon.png --out /tmp/icon_1024.png
+          sips -z 16 16     /tmp/icon_1024.png --out icon.iconset/icon_16x16.png
+          sips -z 32 32     /tmp/icon_1024.png --out icon.iconset/icon_16x16@2x.png
+          sips -z 32 32     /tmp/icon_1024.png --out icon.iconset/icon_32x32.png
+          sips -z 64 64     /tmp/icon_1024.png --out icon.iconset/icon_32x32@2x.png
+          sips -z 128 128   /tmp/icon_1024.png --out icon.iconset/icon_128x128.png
+          sips -z 256 256   /tmp/icon_1024.png --out icon.iconset/icon_128x128@2x.png
+          sips -z 256 256   /tmp/icon_1024.png --out icon.iconset/icon_256x256.png
+          sips -z 512 512   /tmp/icon_1024.png --out icon.iconset/icon_256x256@2x.png
+          sips -z 512 512   /tmp/icon_1024.png --out icon.iconset/icon_512x512.png
+          cp /tmp/icon_1024.png icon.iconset/icon_512x512@2x.png
+          iconutil -c icns icon.iconset -o src-tauri/icons/icon.icns
+      - name: Add icns to config
         if: matrix.platform == 'macos-latest'
         run: |
           python3 -c "
@@ -76,13 +64,10 @@ jobs:
           if 'icons/icon.icns' not in icons: icons.append('icons/icon.icns')
           with open('src-tauri/tauri.conf.json','w') as f: json.dump(cfg,f,indent=2)
           "
-
       - name: Install Tauri CLI
         run: cargo install tauri-cli --version "^2"
-
       - name: Build
         run: cargo tauri build --target ${{ matrix.target }}
-
       - name: Upload (Windows)
         if: matrix.platform == 'windows-latest'
         uses: actions/upload-artifact@v4
@@ -91,14 +76,12 @@ jobs:
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
             src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
-
       - name: Upload (macOS)
         if: matrix.platform == 'macos-latest'
         uses: actions/upload-artifact@v4
         with:
           name: easyenv-${{ matrix.label }}
           path: src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
-
       - name: Upload (Linux)
         if: matrix.platform == 'ubuntu-22.04'
         uses: actions/upload-artifact@v4
@@ -107,7 +90,6 @@ jobs:
           path: |
             src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
             src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
-
   release:
     needs: build
     runs-on: ubuntu-latest
