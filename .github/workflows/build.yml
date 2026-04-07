@@ -48,20 +48,23 @@ jobs:
             javascriptcoregtk-4.1-dev
 
       - name: Generate macOS .icns
-        if: matrix.platform == 'macos-latest'
-        run: |
-          mkdir -p icon.iconset
-          sips -z 16 16     src-tauri/icons/icon.png --out icon.iconset/icon_16x16.png
-          sips -z 32 32     src-tauri/icons/icon.png --out icon.iconset/icon_16x16@2x.png
-          sips -z 32 32     src-tauri/icons/icon.png --out icon.iconset/icon_32x32.png
-          sips -z 64 64     src-tauri/icons/icon.png --out icon.iconset/icon_32x32@2x.png
-          sips -z 128 128   src-tauri/icons/icon.png --out icon.iconset/icon_128x128.png
-          sips -z 256 256   src-tauri/icons/icon.png --out icon.iconset/icon_128x128@2x.png
-          sips -z 256 256   src-tauri/icons/icon.png --out icon.iconset/icon_256x256.png
-          sips -z 512 512   src-tauri/icons/icon.png --out icon.iconset/icon_256x256@2x.png
-          sips -z 512 512   src-tauri/icons/icon.png --out icon.iconset/icon_512x512.png
-          sips -z 1024 1024 src-tauri/icons/icon.png --out icon.iconset/icon_512x512@2x.png
-          iconutil -c icns icon.iconset -o src-tauri/icons/icon.icns
+              if: matrix.platform == 'macos-latest'
+              run: |
+                mkdir -p icon.iconset
+                # 先确保源图是 1024x1024
+                sips -z 1024 1024 src-tauri/icons/icon.png --out /tmp/icon_1024.png
+                sips -z 16 16     /tmp/icon_1024.png --out icon.iconset/icon_16x16.png
+                sips -z 32 32     /tmp/icon_1024.png --out icon.iconset/icon_16x16@2x.png
+                sips -z 32 32     /tmp/icon_1024.png --out icon.iconset/icon_32x32.png
+                sips -z 64 64     /tmp/icon_1024.png --out icon.iconset/icon_32x32@2x.png
+                sips -z 128 128   /tmp/icon_1024.png --out icon.iconset/icon_128x128.png
+                sips -z 256 256   /tmp/icon_1024.png --out icon.iconset/icon_128x128@2x.png
+                sips -z 256 256   /tmp/icon_1024.png --out icon.iconset/icon_256x256.png
+                sips -z 512 512   /tmp/icon_1024.png --out icon.iconset/icon_256x256@2x.png
+                sips -z 512 512   /tmp/icon_1024.png --out icon.iconset/icon_512x512.png
+                cp /tmp/icon_1024.png icon.iconset/icon_512x512@2x.png
+                iconutil -c icns icon.iconset -o src-tauri/icons/icon.icns
+                ls -la src-tauri/icons/icon.icns
 
       - name: Add icns to config (macOS)
         if: matrix.platform == 'macos-latest'
