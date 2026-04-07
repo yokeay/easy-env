@@ -1,6 +1,6 @@
 {
   "productName": "easyenv",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "identifier": "com.easyenv.app",
   "build": {
     "frontendDist": "../src",
