@@ -1,8 +1,9 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 mod tasks;
 
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager};   
 use tauri::tray::TrayIconBuilder;
 
 #[derive(Default)]
