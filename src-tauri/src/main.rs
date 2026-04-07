@@ -9,8 +9,6 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use tauri::menu::{MenuBuilder, MenuItemBuilder};
-use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState};
 use tauri::{AppHandle, Emitter, Manager};
 
 // ============================================================
@@ -18,7 +16,12 @@ use tauri::{AppHandle, Emitter, Manager};
 // ============================================================
 struct AppState {
     cancel_flags: Mutex<HashMap<u32, Arc<AtomicBool>>>,
-    log_dir: Mutex<PathBuf>,
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self { cancel_flags: Mutex::new(HashMap::new()) }
+    }
 }
 
 // ============================================================
@@ -102,15 +105,14 @@ fn log_dir() -> PathBuf {
 }
 
 fn create_log_file() -> PathBuf {
-    let dir = log_dir();
     let name = Local::now().format("%Y%m%d_%H%M%S_log.txt").to_string();
-    dir.join(name)
+    log_dir().join(name)
 }
 
 pub fn write_log(log_path: &PathBuf, msg: &str) {
-    let timestamp = Local::now().format("%Y-%m-%d %H:%M:%S");
+    let ts = Local::now().format("%Y-%m-%d %H:%M:%S");
     if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open(log_path) {
-        let _ = writeln!(f, "[{}] {}", timestamp, msg);
+        let _ = writeln!(f, "[{}] {}", ts, msg);
     }
 }
 
@@ -128,10 +130,10 @@ fn config_dir() -> PathBuf {
 #[tauri::command]
 fn load_config() -> Vec<EnvConfig> {
     let path = config_dir().join("environments.json");
-    match std::fs::read_to_string(&path) {
-        Ok(c) => serde_json::from_str(&c).unwrap_or_default(),
-        Err(_) => Vec::new(),
-    }
+    std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|c| serde_json::from_str(&c).ok())
+        .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -151,10 +153,6 @@ async fn install_environments(
     envs: Vec<InstallPayload>,
 ) -> Result<String, String> {
     let log_path = create_log_file();
-    {
-        let mut ld = state.log_dir.lock().unwrap();
-        *ld = log_path.clone();
-    }
 
     for env in envs {
         let app2 = app.clone();
@@ -162,18 +160,21 @@ async fn install_environments(
         let log = log_path.clone();
         let cancel = Arc::new(AtomicBool::new(false));
         {
-            state.cancel_flags.lock().unwrap().insert(env_id, cancel.clone());
+            if let Ok(mut flags) = state.cancel_flags.lock() {
+                flags.insert(env_id, cancel.clone());
+            }
         }
 
         tauri::async_runtime::spawn(async move {
-            write_log(&log, &format!("=== Start installing: {} ===", env.name));
+            write_log(&log, &format!("=== Start: {} ===", env.name));
             let mut installed_paths: Vec<PathBuf> = Vec::new();
 
-            // Install software items
             for (i, soft) in env.software.iter().enumerate() {
                 if cancel.load(Ordering::Relaxed) {
-                    write_log(&log, "Cancelled by user, rolling back...");
-                    for p in &installed_paths { let _ = std::fs::remove_dir_all(p); }
+                    write_log(&log, "Cancelled, rolling back");
+                    for p in &installed_paths {
+                        if p.is_dir() { let _ = std::fs::remove_dir_all(p); }
+                    }
                     let _ = app2.emit("env-done", EnvDoneEvent {
                         id: env_id, status: "cancelled".into(), message: "Rolled back".into(),
                     });
@@ -183,7 +184,7 @@ async fn install_environments(
                 let result = tasks::install_software(soft, &app2, env_id, i, &cancel, &log).await;
 
                 if cancel.load(Ordering::Relaxed) {
-                    for p in &installed_paths { let _ = std::fs::remove_dir_all(p); }
+                    for p in &installed_paths { if p.is_dir() { let _ = std::fs::remove_dir_all(p); } }
                     let _ = app2.emit("env-done", EnvDoneEvent {
                         id: env_id, status: "cancelled".into(), message: "Rolled back".into(),
                     });
@@ -192,7 +193,7 @@ async fn install_environments(
 
                 if !result.success {
                     write_log(&log, &format!("FAILED: {}", result.message));
-                    for p in &installed_paths { let _ = std::fs::remove_dir_all(p); }
+                    for p in &installed_paths { if p.is_dir() { let _ = std::fs::remove_dir_all(p); } }
                     let _ = app2.emit("env-done", EnvDoneEvent {
                         id: env_id, status: "failed".into(), message: result.message,
                     });
@@ -208,32 +209,28 @@ async fn install_environments(
             for (i, script) in env.scripts.iter().enumerate() {
                 if cancel.load(Ordering::Relaxed) { break; }
                 let desc = if !script.command.is_empty() {
-                    format!("Running script: {}", &script.command[..script.command.len().min(60)])
+                    format!("Script: {}", &script.command[..script.command.len().min(60)])
                 } else {
-                    format!("Running script file: {}", &script.file_path)
+                    format!("Script file: {}", &script.file_path)
                 };
                 write_log(&log, &desc);
                 let _ = app2.emit("install-progress", ProgressEvent {
                     id: env_id, software_index: env.software.len() + i, progress: 50.0,
                     status: "script".into(), message: desc.clone(), operation: "executing script".into(),
                 });
-
                 let result = tasks::run_script(script).await;
-                write_log(&log, &format!("Script result: {}", if result.success {"OK"} else {&result.message}));
-
+                write_log(&log, &format!("Script: {}", if result.success { "OK" } else { &result.message }));
                 let _ = app2.emit("install-progress", ProgressEvent {
-                    id: env_id, software_index: env.software.len() + i,
-                    progress: 100.0,
-                    status: if result.success {"done"} else {"error"}.into(),
+                    id: env_id, software_index: env.software.len() + i, progress: 100.0,
+                    status: if result.success { "done" } else { "error" }.into(),
                     message: result.message, operation: "script done".into(),
                 });
-
                 if !result.success { break; }
             }
 
-            write_log(&log, &format!("=== Finished: {} ===", env.name));
+            write_log(&log, &format!("=== Done: {} ===", env.name));
             let _ = app2.emit("env-done", EnvDoneEvent {
-                id: env_id, status: "installed".into(), message: "All done".into(),
+                id: env_id, status: "installed".into(), message: "Complete".into(),
             });
         });
     }
@@ -242,8 +239,10 @@ async fn install_environments(
 
 #[tauri::command]
 async fn stop_install(state: tauri::State<'_, AppState>, env_id: u32) -> Result<(), String> {
-    if let Some(f) = state.cancel_flags.lock().unwrap().get(&env_id) {
-        f.store(true, Ordering::Relaxed);
+    if let Ok(flags) = state.cancel_flags.lock() {
+        if let Some(f) = flags.get(&env_id) {
+            f.store(true, Ordering::Relaxed);
+        }
     }
     Ok(())
 }
@@ -254,11 +253,19 @@ async fn stop_install(state: tauri::State<'_, AppState>, env_id: u32) -> Result<
 #[tauri::command]
 async fn check_update() -> Result<UpdateInfo, String> {
     let current = env!("CARGO_PKG_VERSION").to_string();
-    let client = reqwest::Client::builder().user_agent("easyenv").build().map_err(|e| e.to_string())?;
-    let resp = client.get("https://api.github.com/repos/yokeay/easy-env/releases/latest")
-        .send().await.map_err(|e| format!("Network: {}", e))?;
+    let client = reqwest::Client::builder()
+        .user_agent("easyenv")
+        .build()
+        .map_err(|e| e.to_string())?;
+    let resp = client
+        .get("https://api.github.com/repos/yokeay/easy-env/releases/latest")
+        .send()
+        .await
+        .map_err(|e| format!("Network: {}", e))?;
     if !resp.status().is_success() {
-        return Ok(UpdateInfo { has_update: false, current: current.clone(), latest: current, download_url: String::new() });
+        return Ok(UpdateInfo {
+            has_update: false, current: current.clone(), latest: current, download_url: String::new(),
+        });
     }
     let body: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
     let latest = body["tag_name"].as_str().unwrap_or("").trim_start_matches('v').to_string();
@@ -272,27 +279,34 @@ fn version_gt(a: &str, b: &str) -> bool {
     let (va, vb) = (p(a), p(b));
     for i in 0..va.len().max(vb.len()) {
         let (x, y) = (va.get(i).copied().unwrap_or(0), vb.get(i).copied().unwrap_or(0));
-        if x > y { return true; } if x < y { return false; }
+        if x > y { return true; }
+        if x < y { return false; }
     }
     false
 }
 
 // ============================================================
-// Window control commands
+// Window control
 // ============================================================
 #[tauri::command]
 async fn win_minimize(window: tauri::WebviewWindow) -> Result<(), String> {
     window.minimize().map_err(|e| e.to_string())
 }
+
 #[tauri::command]
 async fn win_toggle_maximize(window: tauri::WebviewWindow) -> Result<(), String> {
-    if window.is_maximized().unwrap_or(false) { window.unmaximize().map_err(|e| e.to_string()) }
-    else { window.maximize().map_err(|e| e.to_string()) }
+    if window.is_maximized().unwrap_or(false) {
+        window.unmaximize().map_err(|e| e.to_string())
+    } else {
+        window.maximize().map_err(|e| e.to_string())
+    }
 }
+
 #[tauri::command]
 async fn win_close(window: tauri::WebviewWindow) -> Result<(), String> {
     window.hide().map_err(|e| e.to_string())
 }
+
 #[tauri::command]
 async fn win_quit(app: AppHandle) -> Result<(), String> {
     app.exit(0);
@@ -307,52 +321,23 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState {
-            cancel_flags: Mutex::new(HashMap::new()),
-            log_dir: Mutex::new(PathBuf::new()),
-        })
+        .manage(AppState::default())
         .setup(|app| {
-            // Tray with right-click menu
-            let show = MenuItemBuilder::with_id("show", "显示界面").build(app)?;
-            let quit = MenuItemBuilder::with_id("quit", "退出软件").build(app)?;
-            let menu = MenuBuilder::new(app).item(&show).item(&quit).build()?;
-
-            let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().cloned().expect("no icon"))
-                .tooltip("easyenv")
-                .menu(&menu)
-                .on_menu_event(|app, event| {
-                    match event.id().as_ref() {
-                        "show" => {
-                            if let Some(w) = app.get_webview_window("main") {
-                                let _ = w.show();
-                                let _ = w.set_focus();
-                            }
-                        }
-                        "quit" => { app.exit(0); }
-                        _ => {}
-                    }
-                })
-                .on_tray_icon_event(|tray, event| {
-                    if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
-                        let app = tray.app_handle();
-                        if let Some(w) = app.get_webview_window("main") {
-                            let _ = w.show();
-                            let _ = w.set_focus();
-                        }
-                    }
-                })
-                .build(app)?;
-
-            // Hide on close
-            let window = app.get_webview_window("main").unwrap();
-            let w2 = window.clone();
-            window.on_window_event(move |event| {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    let _ = w2.hide();
-                }
+            // Try to set up tray - non-fatal if it fails
+            setup_tray(app).unwrap_or_else(|e| {
+                eprintln!("Tray setup failed (non-fatal): {}", e);
             });
+
+            // Window close -> hide
+            if let Some(window) = app.get_webview_window("main") {
+                let w2 = window.clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = w2.hide();
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -363,4 +348,48 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-fn main() { run(); }
+fn setup_tray(app: &tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder};
+    use tauri::tray::TrayIconBuilder;
+
+    let show = MenuItemBuilder::with_id("show", "显示界面 / Show").build(app)?;
+    let quit = MenuItemBuilder::with_id("quit", "退出 / Quit").build(app)?;
+    let menu = MenuBuilder::new(app).item(&show).item(&quit).build()?;
+
+    let mut builder = TrayIconBuilder::new()
+        .tooltip("easyenv")
+        .menu(&menu)
+        .on_menu_event(|app, event| {
+            match event.id().as_ref() {
+                "show" => {
+                    if let Some(w) = app.get_webview_window("main") {
+                        let _ = w.show();
+                        let _ = w.set_focus();
+                    }
+                }
+                "quit" => { app.exit(0); }
+                _ => {}
+            }
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let tauri::tray::TrayIconEvent::Click { .. } = event {
+                let app = tray.app_handle();
+                if let Some(w) = app.get_webview_window("main") {
+                    let _ = w.show();
+                    let _ = w.set_focus();
+                }
+            }
+        });
+
+    // Try to set icon, but don't fail if unavailable
+    if let Some(icon) = app.default_window_icon().cloned() {
+        builder = builder.icon(icon);
+    }
+
+    builder.build(app)?;
+    Ok(())
+}
+
+fn main() {
+    run();
+}
