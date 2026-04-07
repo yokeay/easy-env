@@ -263,6 +263,15 @@ td:hover .soft-info{display:flex;}
 }
 .donate-card span{font-size:11px;color:var(--fg2);}
 
+/* QR image preview modal */
+.qr-preview-overlay{
+  display:none;position:fixed;top:0;left:0;right:0;bottom:0;
+  background:rgba(0,0,0,.65);z-index:200;align-items:center;justify-content:center;
+  cursor:pointer;
+}
+.qr-preview-overlay.show{display:flex;}
+.qr-preview-overlay img{max-width:320px;max-height:320px;border-radius:12px;}
+
 /* Scrollbar */
 ::-webkit-scrollbar{width:6px;}
 ::-webkit-scrollbar-track{background:transparent;}
@@ -367,14 +376,14 @@ td:hover .soft-info{display:flex;}
       </div>
       <div class="settings-section">
         <div class="settings-label" data-i18n="settings_about">关于</div>
-        <span class="about-link" onclick="openLink('https://github.com/yourname/easyenv')">github.com/yourname/easyenv</span>
+        <span class="about-link" onclick="openLink('https://github.com/yokeay/easy-env')">github.com/yokeay/easy-env</span>
       </div>
       <div class="settings-section">
         <div class="settings-label" data-i18n="settings_donate">赞赏</div>
         <div class="donate-grid">
-          <div class="donate-card"><div class="donate-qr">QR</div><span data-i18n="alipay">支付宝</span></div>
-          <div class="donate-card"><div class="donate-qr">QR</div><span data-i18n="wechat">微信</span></div>
-          <div class="donate-card"><div class="donate-qr">QR</div><span>PayPal</span></div>
+          <div class="donate-card" onclick="showQR('https://qnm.hunliji.com/o_1jlilq3m11508dt9jbgu6ij0rc.png')"><div class="donate-qr"><img src="https://qnm.hunliji.com/o_1jlilq3m11508dt9jbgu6ij0rc.png" style="width:48px;height:48px;border-radius:4px;object-fit:cover;"></div><span data-i18n="alipay">支付宝</span></div>
+          <div class="donate-card" onclick="showQR('https://qnm.hunliji.com/o_1jlilq3m1t0akh814bn3mq1eurd.png')"><div class="donate-qr"><img src="https://qnm.hunliji.com/o_1jlilq3m1t0akh814bn3mq1eurd.png" style="width:48px;height:48px;border-radius:4px;object-fit:cover;"></div><span data-i18n="wechat">微信</span></div>
+          <div class="donate-card" onclick="showQR('https://qnm.hunliji.com/o_1jlilq3m1c8e6nm1727hlp1rdpb.png')"><div class="donate-qr"><img src="https://qnm.hunliji.com/o_1jlilq3m1c8e6nm1727hlp1rdpb.png" style="width:48px;height:48px;border-radius:4px;object-fit:cover;"></div><span>PayPal</span></div>
         </div>
       </div>
     </div>
@@ -413,6 +422,11 @@ td:hover .soft-info{display:flex;}
     </div>
     <div class="soft-popup-list" id="softlist-body"></div>
   </div>
+</div>
+
+<!-- QR Preview -->
+<div class="qr-preview-overlay" id="qr-preview" onclick="this.classList.remove('show')">
+  <img id="qr-preview-img" src="">
 </div>
 
 <script>
@@ -473,6 +487,9 @@ function applyI18n(){
     const k = el.getAttribute('data-i18n-placeholder');
     if(t(k)) el.placeholder = t(k);
   });
+  // Re-render dynamic content so table/progress pick up new language
+  renderTable();
+  renderProgress();
 }
 
 // ============================================================
@@ -503,42 +520,9 @@ document.querySelectorAll('.nav-item').forEach(item=>{
 // ============================================================
 // Data
 // ============================================================
-let environments = [
-  {id:1,name:'Java',software:[
-    {name:'JDK 21',folder:'jdk-21',dir:'C:\\dev',url:'https://adoptium.net/temurin/releases/',envVar:true},
-    {name:'Maven 3.9',folder:'apache-maven-3.9',dir:'C:\\dev',url:'https://maven.apache.org/download.cgi',envVar:true},
-  ],status:'installed',progress:100},
-  {id:2,name:'Flutter',software:[
-    {name:'Flutter SDK',folder:'flutter_sdk',dir:'C:\\dev',url:'https://storage.flutter-io.cn/...',envVar:true},
-    {name:'Dart SDK',folder:'dart_sdk',dir:'C:\\dev',url:'https://storage.flutter-io.cn/...',envVar:true},
-    {name:'Android SDK',folder:'android_sdk',dir:'C:\\dev',url:'https://developer.android.com/...',envVar:true},
-  ],status:'installing',progress:42},
-  {id:3,name:'Python',software:[
-    {name:'Python 3.12',folder:'python-3.12',dir:'C:\\dev',url:'https://python.org/...',envVar:true},
-    {name:'',folder:'pip',dir:'',url:'',envVar:false},
-    {name:'',folder:'virtualenv',dir:'',url:'',envVar:false},
-  ],status:'none',progress:0},
-  {id:4,name:'Rust',software:[
-    {name:'rustup',folder:'rustup',dir:'~/.rustup',url:'https://sh.rustup.rs',envVar:true},
-    {name:'',folder:'cargo',dir:'~/.cargo',url:'',envVar:true},
-    {name:'',folder:'rustfmt',dir:'',url:'',envVar:false},
-    {name:'',folder:'clippy',dir:'',url:'',envVar:false},
-  ],status:'none',progress:0},
-  {id:5,name:'前端 Node',software:[
-    {name:'fnm',folder:'fnm',dir:'C:\\dev',url:'https://github.com/Schniz/fnm',envVar:true},
-    {name:'Node.js LTS',folder:'node',dir:'',url:'',envVar:true},
-    {name:'pnpm',folder:'pnpm',dir:'',url:'',envVar:false},
-    {name:'',folder:'yarn',dir:'',url:'',envVar:false},
-  ],status:'installed',progress:100},
-  {id:6,name:'Go',software:[
-    {name:'Go 1.22',folder:'go',dir:'C:\\dev',url:'https://go.dev/dl/',envVar:true},
-  ],status:'none',progress:0},
-  {id:7,name:'Docker',software:[
-    {name:'Docker Desktop',folder:'docker',dir:'C:\\Program Files',url:'https://docker.com/...',envVar:false},
-  ],status:'failed',progress:0},
-];
+let environments = [];
 let selectedIds = new Set();
-let nextId = 8;
+let nextId = 1;
 let editingId = null;
 let searchQuery = '';
 
@@ -839,7 +823,7 @@ Object.values(LANGS).forEach(lang=>{
     currentLang=lang.code;
     langGrid.querySelectorAll('.lang-btn').forEach(b=>b.classList.remove('active'));
     btn.classList.add('active');
-    applyI18n();renderTable();renderProgress();
+    applyI18n();
   });
   langGrid.appendChild(btn);
 });
@@ -854,9 +838,11 @@ document.querySelectorAll('.theme-card').forEach(card=>{
 function openLink(url){
   try{window.__TAURI__?.shell?.open(url);}catch(e){window.open(url,'_blank');}
 }
+function showQR(url){
+  document.getElementById('qr-preview-img').src=url;
+  document.getElementById('qr-preview').classList.add('show');
+}
 applyI18n();
-renderTable();
-renderProgress();
 </script>
 </body>
 </html>
